@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "grocery-basket-barcode-backend"
+version = "1.0.0"
+description = "A Flask-based barcode reader backend for grocery basket applications"
+authors = [
+    {name = "Intel-IoT-Club", email = "your-email@example.com"},
+]
+readme = "README.md"
+license = {text = "MIT"}
+keywords = ["barcode", "flask", "opencv", "grocery", "iot"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "flask>=3.0.0",
+    "flask-cors>=4.0.0",
+    "numpy>=1.24.3",
+    "opencv-python-headless>=4.8.1",
+    "eventlet>=0.33.3",
+    "pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "pytest-flask>=1.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Intel-IoT-Club/grocery-basket-barcode-backend"
+Repository = "https://github.com/Intel-IoT-Club/grocery-basket-barcode-backend"
+Issues = "https://github.com/Intel-IoT-Club/grocery-basket-barcode-backend/issues"
+
+[project.scripts]
+barcode-server = "app:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["*"]
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = ["E203", "W503"]
+exclude = [".git", "__pycache__", "build", "dist", "*.egg-info"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--verbose",
+    "--strict-markers",
+    "--strict-config",
+    "--cov=app",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+]
