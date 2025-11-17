@@ -6,7 +6,6 @@ import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import time
-import base64
 
 app = Flask(__name__)
 CORS(app)
@@ -17,54 +16,78 @@ last_processed_barcode = None
 last_processed_time = 0
 processing_cooldown = 5  # seconds
 
-def debug_barcode_detection(frame):
+def read_barcodes_opencv(frame):
     """
-    Comprehensive barcode detection with detailed debugging
+    Read barcodes using OpenCV's barcode detector
+    Similar to your working pyzbar code
     """
-    print("=== Starting barcode detection ===")
-    
-    # Try multiple approaches
-    approaches = [
-        ("Original", frame),
-        ("Grayscale", cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)),
-        ("Resized", cv2.resize(frame, (0,0), fx=0.5, fy=0.5)),
-        ("Blurred", cv2.GaussianBlur(frame, (3, 3), 0)),
-    ]
-    
-    for approach_name, processed_frame in approaches:
-        print(f"\nTrying approach: {approach_name}")
+    try:
+        # Detect and decode barcodes
+        result = barcode_detector.detectAndDecode(frame)
         
-        try:
-            # Detect barcodes
-            result = barcode_detector.detectAndDecode(processed_frame)
-            print(f"Result length: {len(result)}")
-            
-            # Handle different OpenCV versions
-            if len(result) >= 3:
-                if len(result) == 4:
-                    ok, decoded_info, decoded_type, corners = result
-                    print(f"4-value format - OK: {ok}, Type: {decoded_type}")
-                else:
-                    ok, decoded_info, corners = result
-                    print(f"3-value format - OK: {ok}")
-                
-                if ok:
-                    print(f"Decoded info: {decoded_info}")
-                    if decoded_info and len(decoded_info) > 0:
-                        barcode_data = decoded_info[0].strip()
-                        if barcode_data:
-                            print(f"SUCCESS with {approach_name}: {barcode_data}")
-                            return True, [barcode_data]
-                else:
-                    print(f"No barcode found with {approach_name}")
-            else:
-                print(f"Unexpected result format: {result}")
-                
-        except Exception as e:
-            print(f"Error in {approach_name}: {e}")
+        # Handle different OpenCV return formats
+        if len(result) == 4:
+            # Newer OpenCV: (ok, decoded_info, decoded_type, corners)
+            ok, decoded_info, decoded_type, corners = result
+        elif len(result) == 3:
+            # Older OpenCV: (ok, decoded_info, corners)  
+            ok, decoded_info, corners = result
+        else:
+            return []
+        
+        barcodes = []
+        if ok and decoded_info:
+            for i, barcode_data in enumerate(decoded_info):
+                barcode_text = barcode_data.strip()
+                if barcode_text:
+                    # Get bounding box if available
+                    bbox = None
+                    if corners is not None and i < len(corners):
+                        bbox = corners[i]
+                    
+                    barcodes.append({
+                        'data': barcode_text,
+                        'bbox': bbox
+                    })
+                    print(f"Detected barcode: {barcode_text}")
+        
+        return barcodes
+        
+    except Exception as e:
+        print(f"Error in barcode detection: {e}")
+        return []
+
+def preprocess_frame(frame):
+    """
+    Preprocess frame to improve barcode detection
+    """
+    # Convert to grayscale (like many barcode detectors prefer)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     
-    print("=== All approaches failed ===")
-    return False, []
+    # Try multiple preprocessing techniques
+    processed_frames = []
+    
+    # 1. Original grayscale
+    processed_frames.append(("grayscale", gray))
+    
+    # 2. Resize if image is too large
+    height, width = gray.shape
+    if width > 800:
+        new_width = 800
+        new_height = int((new_width / width) * height)
+        resized = cv2.resize(gray, (new_width, new_height))
+        processed_frames.append(("resized", resized))
+    
+    # 3. Apply mild blur to reduce noise
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    processed_frames.append(("blurred", blurred))
+    
+    # 4. Increase contrast
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    contrast = clahe.apply(gray)
+    processed_frames.append(("contrast", contrast))
+    
+    return processed_frames
 
 @app.route('/api/upload_frame', methods=['POST'])
 def handle_frame_upload():
@@ -88,33 +111,51 @@ def handle_frame_upload():
 
         print(f"Decoded image shape: {frame.shape}")
         
-        # Detect barcodes with comprehensive debugging
-        ok, decoded_info = debug_barcode_detection(frame)
+        # Try multiple preprocessing techniques
+        processed_frames = preprocess_frame(frame)
+        detected_barcodes = []
         
-        if ok and decoded_info and len(decoded_info) > 0:
-            barcode_data = decoded_info[0].strip()
+        for method_name, processed_frame in processed_frames:
+            print(f"Trying detection with: {method_name}")
+            barcodes = read_barcodes_opencv(processed_frame)
+            if barcodes:
+                detected_barcodes.extend(barcodes)
+                print(f"Found {len(barcodes)} barcodes with {method_name}")
+        
+        # Remove duplicates
+        unique_barcodes = []
+        seen_barcodes = set()
+        for barcode in detected_barcodes:
+            if barcode['data'] not in seen_barcodes:
+                unique_barcodes.append(barcode)
+                seen_barcodes.add(barcode['data'])
+        
+        if unique_barcodes:
+            # Use the first detected barcode
+            barcode_data = unique_barcodes[0]['data']
             print(f"Final barcode data: '{barcode_data}'")
             
-            if barcode_data:
-                # Process the barcode data
-                global last_processed_barcode, last_processed_time
-                current_time = time.time()
-                
-                # Check cooldown
-                if barcode_data == last_processed_barcode and (current_time - last_processed_time) < processing_cooldown:
-                    return jsonify({"success": False, "message": "Barcode already processed recently"}), 202
-                
-                # Update last processed barcode
-                last_processed_barcode = barcode_data
-                last_processed_time = current_time
-                
-                return jsonify({
-                    "success": True, 
-                    "barcode_data": barcode_data, 
-                    "message": "Barcode detected successfully"
-                }), 200
+            # Process the barcode data
+            global last_processed_barcode, last_processed_time
+            current_time = time.time()
             
-        return jsonify({"success": False, "message": "No barcode detected"}), 200
+            # Check cooldown
+            if barcode_data == last_processed_barcode and (current_time - last_processed_time) < processing_cooldown:
+                return jsonify({"success": False, "message": "Barcode already processed recently"}), 202
+            
+            # Update last processed barcode
+            last_processed_barcode = barcode_data
+            last_processed_time = current_time
+            
+            return jsonify({
+                "success": True, 
+                "barcode_data": barcode_data, 
+                "message": "Barcode detected successfully",
+                "total_found": len(unique_barcodes)
+            }), 200
+        else:
+            print("No barcodes detected after trying all methods")
+            return jsonify({"success": False, "message": "No barcode detected"}), 200
 
     except Exception as e:
         print(f"Error in /api/upload_frame: {str(e)}")
@@ -142,7 +183,7 @@ def get_barcode_result():
 @app.route('/debug', methods=['POST'])
 def debug_image():
     """
-    Debug endpoint to check image reception
+    Debug endpoint to check image reception and basic barcode detection
     """
     try:
         img_data = request.data
@@ -153,10 +194,15 @@ def debug_image():
         frame = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
         
         if frame is not None:
+            # Try basic barcode detection
+            barcodes = read_barcodes_opencv(frame)
+            
             return jsonify({
                 "success": True,
                 "message": f"Image decoded successfully: {frame.shape}",
-                "shape": frame.shape
+                "shape": frame.shape,
+                "barcodes_found": len(barcodes),
+                "barcodes": [b['data'] for b in barcodes]
             }), 200
         else:
             return jsonify({
@@ -170,10 +216,28 @@ def debug_image():
             "message": f"Debug error: {str(e)}"
         }), 500
 
+@app.route('/test', methods=['GET'])
+def test_endpoint():
+    """
+    Simple test endpoint to verify server is running
+    """
+    return jsonify({
+        "success": True,
+        "message": "Server is running",
+        "endpoints": {
+            "POST /api/upload_frame": "Upload image for barcode detection",
+            "GET /result": "Get last detected barcode",
+            "POST /debug": "Debug image upload",
+            "GET /test": "This test endpoint"
+        }
+    }), 200
+
 if __name__ == '__main__':
     print("Starting Barcode Reader Server...")
+    print("Using OpenCV barcode detector")
     print("Available endpoints:")
     print("  POST /api/upload_frame - Upload image frame for barcode detection")
     print("  POST /debug - Debug image upload")
     print("  GET  /result - Get the last detected barcode")
+    print("  GET  /test - Test endpoint")
     app.run(host='0.0.0.0', port=5000, debug=False)
