@@ -6,7 +6,6 @@ import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import time
-import base64
 
 app = Flask(__name__)
 CORS(app)
@@ -17,33 +16,66 @@ last_processed_barcode = None
 last_processed_time = 0
 processing_cooldown = 5  # seconds
 
-def detect_barcodes(frame):
+def preprocess_image(frame):
     """
-    Detect barcodes in frame, handling different OpenCV versions
+    Preprocess image to improve barcode detection
     """
-    try:
-        result = barcode_detector.detectAndDecode(frame)
-        print(f"OpenCV detectAndDecode returned: {len(result)} values")
-        
-        # Handle different return formats
-        if len(result) == 4:
-            # Newer OpenCV: (ok, decoded_info, decoded_type, corners)
-            ok, decoded_info, decoded_type, corners = result
-            print(f"New format - OK: {ok}, Decoded: {decoded_info}, Type: {decoded_type}")
-        elif len(result) == 3:
-            # Older OpenCV: (ok, decoded_info, corners)
-            ok, decoded_info, corners = result
-            print(f"Old format - OK: {ok}, Decoded: {decoded_info}")
-        else:
-            # Unknown format
-            print(f"Unknown format: {result}")
-            return False, []
+    # Convert to grayscale
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # Apply different preprocessing techniques
+    processed_images = []
+    
+    # 1. Original grayscale
+    processed_images.append(gray)
+    
+    # 2. Adaptive threshold
+    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                   cv2.THRESH_BINARY, 11, 2)
+    processed_images.append(thresh)
+    
+    # 3. Gaussian blur + threshold
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, thresh2 = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    processed_images.append(thresh2)
+    
+    # 4. Edge detection
+    edges = cv2.Canny(gray, 50, 150)
+    processed_images.append(edges)
+    
+    return processed_images
+
+def detect_barcodes_enhanced(frame):
+    """
+    Enhanced barcode detection with multiple preprocessing techniques
+    """
+    best_barcode = None
+    processed_images = preprocess_image(frame)
+    
+    for i, processed_img in enumerate(processed_images):
+        try:
+            result = barcode_detector.detectAndDecode(processed_img)
+            print(f"Attempt {i+1} - OpenCV returned {len(result)} values")
             
-        return ok, decoded_info
-        
-    except Exception as e:
-        print(f"Barcode detection error: {e}")
-        return False, []
+            # Handle different return formats
+            if len(result) == 4:
+                ok, decoded_info, decoded_type, corners = result
+            elif len(result) == 3:
+                ok, decoded_info, corners = result
+            else:
+                continue
+            
+            if ok and decoded_info and len(decoded_info) > 0:
+                barcode_data = decoded_info[0].strip()
+                if barcode_data:
+                    print(f"Found barcode with method {i+1}: {barcode_data}")
+                    return True, [barcode_data]
+                    
+        except Exception as e:
+            print(f"Method {i+1} failed: {e}")
+            continue
+    
+    return False, []
 
 @app.route('/api/upload_frame', methods=['POST'])
 def handle_frame_upload():
@@ -67,10 +99,10 @@ def handle_frame_upload():
 
         print(f"Decoded image shape: {frame.shape}")
         
-        # Detect barcodes
-        ok, decoded_info = detect_barcodes(frame)
+        # Detect barcodes with enhanced method
+        ok, decoded_info = detect_barcodes_enhanced(frame)
         
-        print(f"Detection result - OK: {ok}, Decoded info: {decoded_info}")
+        print(f"Enhanced detection result - OK: {ok}, Decoded info: {decoded_info}")
         
         if ok and decoded_info and len(decoded_info) > 0:
             barcode_data = decoded_info[0].strip()
