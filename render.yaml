@@ -1,9 +1,10 @@
 services:
   - type: web
-    name: barcode-api
-    runtime: python
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn app:app --timeout 0 --preload"
+    name: barcode-backend
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.10
+        - key: PYTHON_VERSION
+        value: 3.11
