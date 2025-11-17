@@ -1,17 +1,18 @@
 import eventlet
 eventlet.monkey_patch()
 
-import cv2
+from PIL import Image
 import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import time
+import io
+from pyzbar.pyzbar import decode
 
 app = Flask(__name__)
 CORS(app)
 
 # Globals for barcode decoding
-barcode_detector = cv2.barcode_BarcodeDetector()
 last_processed_barcode = None
 last_processed_time = 0
 processing_cooldown = 5  # seconds
@@ -28,18 +29,14 @@ def handle_frame_upload():
         if not img_data:
             return jsonify({"success": False, "message": "No image data"}), 400
 
-        # Decode image
-        img_np = np.frombuffer(img_data, dtype=np.uint8)
-        frame = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
+        # Convert to PIL Image
+        image = Image.open(io.BytesIO(img_data))
         
-        if frame is None:
-            return jsonify({"success": False, "message": "Failed to decode image"}), 400
-
-        # Detect barcodes in the frame
-        ok, decoded_info, _, _ = barcode_detector.detectAndDecode(frame)
+        # Detect barcodes
+        barcodes = decode(image)
         
-        if ok and decoded_info and len(decoded_info) > 0:
-            barcode_data = decoded_info[0].strip()
+        if barcodes:
+            barcode_data = barcodes[0].data.decode('utf-8').strip()
             if barcode_data:
                 # Process the barcode data
                 global last_processed_barcode, last_processed_time
@@ -91,4 +88,4 @@ if __name__ == '__main__':
     print("Available endpoints:")
     print("  POST /api/upload_frame - Upload image frame for barcode detection")
     print("  GET  /result - Get the last detected barcode")
-    app.run(host='0.0.0.0', port=5000, debug=False)  # Change to False
+    app.run(host='0.0.0.0', port=5000, debug=False)
