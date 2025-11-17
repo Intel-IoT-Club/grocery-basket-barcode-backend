@@ -91,4 +91,4 @@ if __name__ == '__main__':
     print("Available endpoints:")
     print("  POST /api/upload_frame - Upload image frame for barcode detection")
     print("  GET  /result - Get the last detected barcode")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=False)  # Change to False
