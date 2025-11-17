@@ -2,26 +2,29 @@ import cv2
 import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from pyzxing import BarCodeReader
 
 app = Flask(__name__)
 CORS(app)
 
-last_result = {"barcode": None, "type": None}
+last_result = {"barcode": None}
 
-# OpenCV detector
 detector = cv2.barcode_BarcodeDetector()
 
-# ZXing reader (fallback)
-zxing_reader = BarCodeReader()
-
-def enhance_image(frame):
-    """Improve barcode readability"""
+def enhance(frame):
     # Resize (2x)
     frame = cv2.resize(frame, None, fx=2.0, fy=2.0)
 
     # Convert to grayscale
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # Denoise
+    gray = cv2.fastNlMeansDenoising(gray, h=10)
+
+    # Sharpen
+    kernel = np.array([[0, -1, 0],
+                       [-1, 5,-1],
+                       [0, -1, 0]])
+    gray = cv2.filter2D(gray, -1, kernel)
 
     # Increase contrast
     gray = cv2.equalizeHist(gray)
@@ -29,81 +32,55 @@ def enhance_image(frame):
     return gray
 
 
-def try_opencv(gray):
-    """Try decoding using OpenCV"""
+def safe_decode(gray):
     result = detector.detectAndDecode(gray)
 
+    # Handle both OpenCV return formats
     if len(result) == 4:
         ok, decoded_info, decoded_type, points = result
     else:
         decoded_info, decoded_type, points = result
-        ok = len(decoded_info) > 0
+        ok = decoded_info is not None and len(decoded_info) > 0
 
     if ok and decoded_info:
-        return decoded_info[0], decoded_type[0] if decoded_type else "unknown"
+        return decoded_info[0]
 
-    return None, None
-
-
-def try_zxing(frame):
-    """Try ZXing fallback"""
-    # Save frame temporarily
-    temp_path = "/tmp/frame.png"
-    cv2.imwrite(temp_path, frame)
-
-    out = zxing_reader.decode(temp_path)
-
-    if out and len(out) > 0:
-        return out[0].get("raw", None), out[0].get("format", None)
-
-    return None, None
+    return None
 
 
-@app.route('/api/upload_frame', methods=['POST'])
+@app.route("/api/upload_frame", methods=["POST"])
 def upload_frame():
     global last_result
 
     try:
-        img_data = request.data
-        if not img_data:
-            return jsonify({"success": False, "message": "No image data"}), 400
+        data = request.data
+        if not data:
+            return jsonify({"success": False, "message": "No image"}), 400
 
-        img_np = np.frombuffer(img_data, np.uint8)
+        img_np = np.frombuffer(data, np.uint8)
         frame = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
 
         if frame is None:
             return jsonify({"success": False, "message": "Invalid image"}), 400
 
-        # -- Step 1: Enhance image --
-        gray = enhance_image(frame)
+        # Enhance before decoding
+        gray = enhance(frame)
 
-        # -- Step 2: Try OpenCV --
-        barcode, code_type = try_opencv(gray)
+        barcode = safe_decode(gray)
 
-        # -- Step 3: If OpenCV fails, fallback to ZXing --
         if not barcode:
-            barcode, code_type = try_zxing(frame)
-
-        # -- Step 4: No barcode found --
-        if not barcode:
-            last_result = {"barcode": None, "type": None}
+            last_result = {"barcode": None}
             return jsonify({"success": False, "message": "No barcode detected"}), 200
 
-        # -- Step 5: Success --
-        last_result = {"barcode": barcode, "type": code_type}
-
-        return jsonify({
-            "success": True,
-            "barcode": barcode,
-            "type": code_type
-        })
+        last_result = {"barcode": barcode}
+        return jsonify({"success": True, "barcode": barcode}), 200
 
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
 
-@app.route('/result', methods=['GET'])
-def get_result():
+@app.route("/result", methods=["GET"])
+def result():
     return jsonify(last_result)
 
 
