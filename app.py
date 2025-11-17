@@ -1,20 +1,72 @@
+# app_pyzbar.py - Alternative using pyzbar
 import eventlet
 eventlet.monkey_patch()
 
-import cv2
-import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from PIL import Image
 import time
+import io
+from pyzbar.pyzbar import decode
 
 app = Flask(__name__)
 CORS(app)
 
 # Globals for barcode decoding
-barcode_detector = cv2.barcode_BarcodeDetector()
 last_processed_barcode = None
 last_processed_time = 0
 processing_cooldown = 5  # seconds
+
+@app.route('/api/upload_frame', methods=['POST'])
+def handle_frame_upload():
+    """
+    Input endpoint: Accepts image frames and detects barcodes using pyzbar
+    """
+    try:
+        img_data = request.data
+        if not img_data:
+            return jsonify({"success": False, "message": "No image data"}), 400
+
+        print(f"Received image data: {len(img_data)} bytes")
+        
+        # Convert to PIL Image
+        image = Image.open(io.BytesIO(img_data))
+        print(f"Image size: {image.size}, mode: {image.mode}")
+        
+        # Detect barcodes
+        barcodes = decode(image)
+        print(f"Found {len(barcodes)} barcodes")
+        
+        for barcode in barcodes:
+            print(f"Barcode: {barcode}")
+        
+        if barcodes:
+            barcode_data = barcodes[0].data.decode('utf-8').strip()
+            if barcode_data:
+                # Process the barcode data
+                global last_processed_barcode, last_processed_time
+                current_time = time.time()
+                
+                # Check cooldown
+                if barcode_data == last_processed_barcode and (current_time - last_processed_time) < processing_cooldown:
+                    return jsonify({"success": False, "message": "Barcode already processed recently"}), 202
+                
+                # Update last processed barcode
+                last_processed_barcode = barcode_data
+                last_processed_time = current_time
+                
+                return jsonify({
+                    "success": True, 
+                    "barcode_data": barcode_data, 
+                    "message": "Barcode detected successfully"
+                }), 200
+            
+        return jsonify({"success": False, "message": "No barcode detected"}), 200
+
+    except Exception as e:
+        print(f"Error in /api/upload_frame: {str(e)}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
 
 def preprocess_image(frame):
     """
@@ -77,63 +129,6 @@ def detect_barcodes_enhanced(frame):
     
     return False, []
 
-@app.route('/api/upload_frame', methods=['POST'])
-def handle_frame_upload():
-    """
-    Input endpoint: Accepts image frames and detects barcodes
-    """
-    try:
-        img_data = request.data
-        if not img_data:
-            return jsonify({"success": False, "message": "No image data"}), 400
-
-        print(f"Received image data: {len(img_data)} bytes")
-        
-        # Decode image
-        img_np = np.frombuffer(img_data, dtype=np.uint8)
-        frame = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
-        
-        if frame is None:
-            print("Failed to decode image")
-            return jsonify({"success": False, "message": "Failed to decode image"}), 400
-
-        print(f"Decoded image shape: {frame.shape}")
-        
-        # Detect barcodes with enhanced method
-        ok, decoded_info = detect_barcodes_enhanced(frame)
-        
-        print(f"Enhanced detection result - OK: {ok}, Decoded info: {decoded_info}")
-        
-        if ok and decoded_info and len(decoded_info) > 0:
-            barcode_data = decoded_info[0].strip()
-            print(f"Raw barcode data: '{barcode_data}'")
-            
-            if barcode_data:
-                # Process the barcode data
-                global last_processed_barcode, last_processed_time
-                current_time = time.time()
-                
-                # Check cooldown
-                if barcode_data == last_processed_barcode and (current_time - last_processed_time) < processing_cooldown:
-                    return jsonify({"success": False, "message": "Barcode already processed recently"}), 202
-                
-                # Update last processed barcode
-                last_processed_barcode = barcode_data
-                last_processed_time = current_time
-                
-                return jsonify({
-                    "success": True, 
-                    "barcode_data": barcode_data, 
-                    "message": "Barcode detected successfully"
-                }), 200
-            else:
-                return jsonify({"success": False, "message": "Empty barcode data"}), 200
-        else:
-            return jsonify({"success": False, "message": "No barcode detected"}), 200
-
-    except Exception as e:
-        print(f"Error in /api/upload_frame: {str(e)}")
-        return jsonify({"success": False, "message": str(e)}), 500
 
 @app.route('/result', methods=['GET'])
 def get_barcode_result():
