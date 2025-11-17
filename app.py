@@ -1,17 +1,17 @@
 import eventlet
 eventlet.monkey_patch()
 
+import cv2
+import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from PIL import Image
 import time
-import io
-from pyzbar.pyzbar import decode
 
 app = Flask(__name__)
 CORS(app)
 
 # Globals for barcode decoding
+barcode_detector = cv2.barcode_BarcodeDetector()
 last_processed_barcode = None
 last_processed_time = 0
 processing_cooldown = 5  # seconds
@@ -26,14 +26,18 @@ def handle_frame_upload():
         if not img_data:
             return jsonify({"success": False, "message": "No image data"}), 400
 
-        # Convert to PIL Image
-        image = Image.open(io.BytesIO(img_data))
+        # Decode image
+        img_np = np.frombuffer(img_data, dtype=np.uint8)
+        frame = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
         
-        # Detect barcodes
-        barcodes = decode(image)
+        if frame is None:
+            return jsonify({"success": False, "message": "Failed to decode image"}), 400
+
+        # Detect barcodes in the frame
+        ok, decoded_info, _, _ = barcode_detector.detectAndDecode(frame)
         
-        if barcodes:
-            barcode_data = barcodes[0].data.decode('utf-8').strip()
+        if ok and decoded_info and len(decoded_info) > 0:
+            barcode_data = decoded_info[0].strip()
             if barcode_data:
                 # Process the barcode data
                 global last_processed_barcode, last_processed_time
@@ -52,8 +56,10 @@ def handle_frame_upload():
                     "barcode_data": barcode_data, 
                     "message": "Barcode detected successfully"
                 }), 200
-            
-        return jsonify({"success": False, "message": "No barcode detected"}), 200
+            else:
+                return jsonify({"success": False, "message": "Empty barcode data"}), 200
+        else:
+            return jsonify({"success": False, "message": "No barcode detected"}), 200
 
     except Exception as e:
         print(f"Error in /api/upload_frame: {str(e)}")
