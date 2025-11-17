@@ -16,6 +16,30 @@ last_processed_barcode = None
 last_processed_time = 0
 processing_cooldown = 5  # seconds
 
+def detect_barcodes(frame):
+    """
+    Detect barcodes in frame, handling different OpenCV versions
+    """
+    try:
+        result = barcode_detector.detectAndDecode(frame)
+        
+        # Handle different return formats
+        if len(result) == 4:
+            # Newer OpenCV: (ok, decoded_info, decoded_type, corners)
+            ok, decoded_info, _, _ = result
+        elif len(result) == 3:
+            # Older OpenCV: (ok, decoded_info, corners)
+            ok, decoded_info, _ = result
+        else:
+            # Unknown format
+            return False, []
+            
+        return ok, decoded_info
+        
+    except Exception as e:
+        print(f"Barcode detection error: {e}")
+        return False, []
+
 @app.route('/api/upload_frame', methods=['POST'])
 def handle_frame_upload():
     """
@@ -33,8 +57,8 @@ def handle_frame_upload():
         if frame is None:
             return jsonify({"success": False, "message": "Failed to decode image"}), 400
 
-        # Detect barcodes in the frame
-        ok, decoded_info, _, _ = barcode_detector.detectAndDecode(frame)
+        # Detect barcodes
+        ok, decoded_info = detect_barcodes(frame)
         
         if ok and decoded_info and len(decoded_info) > 0:
             barcode_data = decoded_info[0].strip()
