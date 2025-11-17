@@ -1,10 +1,9 @@
 import eventlet
 eventlet.monkey_patch()
 
-from PIL import Image
-import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from PIL import Image
 import time
 import io
 from pyzbar.pyzbar import decode
@@ -16,8 +15,6 @@ CORS(app)
 last_processed_barcode = None
 last_processed_time = 0
 processing_cooldown = 5  # seconds
-
-# --- API Endpoints ---
 
 @app.route('/api/upload_frame', methods=['POST'])
 def handle_frame_upload():
@@ -55,10 +52,8 @@ def handle_frame_upload():
                     "barcode_data": barcode_data, 
                     "message": "Barcode detected successfully"
                 }), 200
-            else:
-                return jsonify({"success": False, "message": "Empty barcode data"}), 200
-        else:
-            return jsonify({"success": False, "message": "No barcode detected"}), 200
+            
+        return jsonify({"success": False, "message": "No barcode detected"}), 200
 
     except Exception as e:
         print(f"Error in /api/upload_frame: {str(e)}")
