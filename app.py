@@ -6,6 +6,7 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
+# Stores last detected barcode
 last_result = {"barcode": None}
 
 # OpenCV barcode detector
@@ -20,19 +21,32 @@ def upload_frame():
         if not img_data:
             return jsonify({"success": False, "message": "No image received"}), 400
 
+        # Convert bytes → OpenCV image
         img_np = np.frombuffer(img_data, np.uint8)
         frame = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
 
         if frame is None:
             return jsonify({"success": False, "message": "Invalid image"}), 400
 
-        ok, decoded_info, _, _ = detector.detectAndDecode(frame)
+        # ---- Safe decode handling for all OpenCV builds ----
+        result = detector.detectAndDecode(frame)
 
+        # OpenCV 4.8+ returns 4 items / older returns 3
+        if len(result) == 4:
+            ok, decoded_info, decoded_type, points = result
+        elif len(result) == 3:
+            decoded_info, decoded_type, points = result
+            ok = len(decoded_info) > 0
+        else:
+            return jsonify({"success": False, "message": "Unexpected decode output"}), 500
+
+        # ---- If barcode found ----
         if ok and decoded_info:
             barcode = decoded_info[0]
             last_result["barcode"] = barcode
             return jsonify({"success": True, "barcode": barcode}), 200
 
+        # ---- If no barcode ----
         last_result["barcode"] = None
         return jsonify({"success": False, "message": "No barcode detected"}), 200
 
