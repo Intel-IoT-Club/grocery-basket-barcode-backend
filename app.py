@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import pytesseract
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -10,14 +11,15 @@ last_result = {"barcode": None}
 
 detector = cv2.barcode_BarcodeDetector()
 
-def enhance(frame):
-    # Resize (2x)
-    frame = cv2.resize(frame, None, fx=2.0, fy=2.0)
 
-    # Convert to grayscale
+# ----------------------------
+# IMAGE ENHANCEMENT
+# ----------------------------
+def enhance(frame):
+    frame = cv2.resize(frame, None, fx=2.0, fy=2.0)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    # Denoise
+    # Noise removal
     gray = cv2.fastNlMeansDenoising(gray, h=10)
 
     # Sharpen
@@ -26,24 +28,48 @@ def enhance(frame):
                        [0, -1, 0]])
     gray = cv2.filter2D(gray, -1, kernel)
 
-    # Increase contrast
+    # Contrast boost
     gray = cv2.equalizeHist(gray)
 
     return gray
 
 
-def safe_decode(gray):
+# ----------------------------
+# TRY BARCODE DETECTOR FIRST
+# ----------------------------
+def try_opencv(gray):
     result = detector.detectAndDecode(gray)
 
-    # Handle both OpenCV return formats
     if len(result) == 4:
         ok, decoded_info, decoded_type, points = result
     else:
         decoded_info, decoded_type, points = result
-        ok = decoded_info is not None and len(decoded_info) > 0
+        ok = decoded_info and len(decoded_info) > 0
 
     if ok and decoded_info:
         return decoded_info[0]
+
+    return None
+
+
+# ----------------------------
+# OCR FALLBACK – READ DIGITS BELOW THE BARCODE
+# ----------------------------
+def try_ocr(frame):
+    # Crop bottom 35% (where barcode digits usually are)
+    h, w = frame.shape[:2]
+    crop = frame[int(h * 0.60):h, 0:w]
+
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+
+    # OCR only digits
+    text = pytesseract.image_to_string(gray, config="--psm 6 -c tessedit_char_whitelist=0123456789")
+    text = "".join([c for c in text if c.isdigit()])
+
+    # Valid product barcodes are 11–14 digits
+    if len(text) >= 11:
+        return text
 
     return None
 
@@ -53,27 +79,33 @@ def upload_frame():
     global last_result
 
     try:
-        data = request.data
-        if not data:
+        raw = request.data
+        if not raw:
             return jsonify({"success": False, "message": "No image"}), 400
 
-        img_np = np.frombuffer(data, np.uint8)
-        frame = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
-
+        # Decode image
+        arr = np.frombuffer(raw, np.uint8)
+        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if frame is None:
             return jsonify({"success": False, "message": "Invalid image"}), 400
 
-        # Enhance before decoding
+        # Enhance first
         gray = enhance(frame)
 
-        barcode = safe_decode(gray)
+        # Try OpenCV detector
+        barcode = try_opencv(gray)
 
+        # If OpenCV returns 1 digit or fails → OCR fallback
+        if not barcode or len(barcode) <= 3:
+            barcode = try_ocr(frame)
+
+        # Final check
         if not barcode:
             last_result = {"barcode": None}
             return jsonify({"success": False, "message": "No barcode detected"}), 200
 
         last_result = {"barcode": barcode}
-        return jsonify({"success": True, "barcode": barcode}), 200
+        return jsonify({"success": True, "barcode": barcode})
 
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
