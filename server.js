@@ -1,12 +1,10 @@
 import express from 'express';
 import Jimp from 'jimp';
 
-// --- FIX: Robust Import Strategy for Quagga ---
-// We import the default package and then check if the functions 
-// are directly on it or nested inside a '.default' property.
+// --- Robust Import Strategy for Quagga ---
 import QuaggaPkg from 'quagga';
 const Quagga = QuaggaPkg.default || QuaggaPkg; 
-// ----------------------------------------------
+// -----------------------------------------
 
 const app = express();
 const PORT = process.env.PORT || 5000; 
@@ -31,25 +29,25 @@ async function decodeBarcode(imageBuffer) {
         // 1. Read the explicit Buffer into Jimp
         const image = await Jimp.read(imageBuffer);
         
-        // 2. Convert to grayscale buffer required by Quagga
-        const { data, width, height } = image.grayscale().bitmap;
+        // 2. Convert image to Base64 Data URI
+        // This fixes the "Invalid file type" error by giving Quagga a standard format
+        const base64Image = await image.getBase64Async(Jimp.MIME_JPEG);
         
         return new Promise((resolve, reject) => {
-            // Verify Quagga is loaded correctly
             if (typeof Quagga.decodeSingle !== 'function') {
-                console.error("CRITICAL ERROR: Quagga.decodeSingle is not a function. Check imports.");
+                console.error("CRITICAL ERROR: Quagga.decodeSingle is not a function.");
                 resolve(null);
                 return;
             }
 
             Quagga.decodeSingle({
-                src: data,
-                numOfWorkers: 0, // Must be 0 for node-mode
+                src: base64Image, // Pass the Base64 string instead of raw pixels
+                numOfWorkers: 0,  // Must be 0 for node-mode
                 inputStream: {
-                    size: width,
-                    height: height
+                    size: 800     // Optional: restricts processing size for speed
                 },
                 decoder: {
+                    // Add 'qr_code_reader' if you need QR codes, but Quagga is best for 1D
                     readers: ["code_128_reader", "ean_reader", "upc_reader", "code_39_reader"]
                 }
             }, (result) => {
@@ -81,9 +79,7 @@ app.post('/api/upload_frame', async (req, res) => {
     }
 
     try {
-        // Explicitly convert raw data to Buffer for Jimp
         const imageBuffer = Buffer.from(req.body); 
-        
         const decodedData = await decodeBarcode(imageBuffer);
         
         if (decodedData) {
@@ -110,7 +106,6 @@ app.get('/result', (req, res) => {
     res.json(latestBarcodeResult);
 });
 
-// Start the server
 app.listen(PORT, () => {
     console.log(`Node.js Barcode Server running on port ${PORT}`);
 });
