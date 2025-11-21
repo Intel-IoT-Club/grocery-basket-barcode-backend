@@ -1,0 +1,15 @@
+{
+  "name": "esp32-barcode-server",
+  "version": "1.0.0",
+  "description": "Barcode decoder for ESP32-CAM stream.",
+  "main": "server.js",
+  "type": "module", 
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "jimp": "^0.22.12",
+    "quagga": "^0.12.1"
+  }
+}
