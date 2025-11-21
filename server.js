@@ -1,10 +1,10 @@
-// Set up modules
+// Set up modules with correct ES Module syntax
 import express from 'express';
-import Quagga from 'quagga';
+// --- FIX 2: Use star import for QuaggaJS to handle its ES Module structure ---
+import * as Quagga from 'quagga';
 import Jimp from 'jimp';
 
 const app = express();
-// Render sets the PORT environment variable; default to 5000 for local testing
 const PORT = process.env.PORT || 5000; 
 
 // --- Global State and Cooldown ---
@@ -16,6 +16,7 @@ let lastScanTime = 0;
 const COOLDOWN_SECONDS = 3;
 
 // Configure Express to accept raw binary data (JPEG image buffer)
+// ESP32-CAM will POST binary image data with Content-Type: image/jpeg
 app.use(express.raw({ 
     type: 'image/jpeg', 
     limit: '10mb' 
@@ -23,32 +24,40 @@ app.use(express.raw({
 
 // --- Core Barcode Decoding Function ---
 async function decodeBarcode(imageBuffer) {
-    // 1. Convert JPEG Buffer to Jimp object
-    const image = await Jimp.read(imageBuffer);
-    
-    // 2. Convert to grayscale buffer required by Quagga
-    const { data, width, height } = image.grayscale().bitmap;
-    
-    return new Promise((resolve, reject) => {
-        // Quagga configuration: set decoders for common 1D barcodes (you can adjust this)
-        Quagga.decodeSingle({
-            src: data,
-            numOfWorkers: 0, // Must be 0 for node-mode
-            inputStream: {
-                size: width,
-                height: height
-            },
-            decoder: {
-                readers: ["code_128_reader", "ean_reader", "upc_reader", "code_39_reader"]
-            }
-        }, (result) => {
-            if (result && result.code) {
-                resolve(result.code);
-            } else {
-                resolve(null);
-            }
+    try {
+        // 1. Read the explicit Buffer into Jimp
+        const image = await Jimp.read(imageBuffer);
+        
+        // 2. Convert to grayscale buffer required by Quagga
+        // Note: QuaggaJS primarily focuses on 1D barcodes and requires grayscale data.
+        const { data, width, height } = image.grayscale().bitmap;
+        
+        return new Promise((resolve, reject) => {
+            // Quagga configuration
+            Quagga.decodeSingle({
+                src: data,
+                numOfWorkers: 0, // Must be 0 for node-mode (server-side)
+                inputStream: {
+                    size: width,
+                    height: height
+                },
+                decoder: {
+                    readers: ["code_128_reader", "ean_reader", "upc_reader", "code_39_reader", "qr_code_reader"] 
+                    // Added qr_code_reader for completeness, but Quagga excels at 1D codes.
+                }
+            }, (result) => {
+                if (result && result.code) {
+                    resolve(result.code);
+                } else {
+                    resolve(null);
+                }
+            });
         });
-    });
+    } catch (error) {
+        // Log Jimp/Quagga processing errors but don't crash the server
+        console.error("Decoding failed during image processing:", error.message);
+        return null;
+    }
 }
 
 
@@ -56,7 +65,7 @@ async function decodeBarcode(imageBuffer) {
 app.post('/api/upload_frame', async (req, res) => {
     const current_time = Date.now() / 1000;
     
-    // Apply Cooldown
+    // Apply Cooldown check
     if (current_time - lastScanTime < COOLDOWN_SECONDS) {
         console.log("Scan ignored (cooldown active).");
         return res.status(202).json({ success: false, message: "Scan ignored (cooldown active)." });
@@ -67,7 +76,10 @@ app.post('/api/upload_frame', async (req, res) => {
     }
 
     try {
-        const decodedData = await decodeBarcode(req.body);
+        // --- FIX 1: Explicitly convert raw data to a standard Buffer for Jimp ---
+        const imageBuffer = Buffer.from(req.body); 
+        
+        const decodedData = await decodeBarcode(imageBuffer);
         
         if (decodedData) {
             // Update global result
@@ -84,6 +96,7 @@ app.post('/api/upload_frame', async (req, res) => {
         }
 
     } catch (error) {
+        // Log the error and return a 500 status
         console.error("Error in /api/upload_frame:", error);
         return res.status(500).json({ success: false, message: error.message });
     }
@@ -91,10 +104,6 @@ app.post('/api/upload_frame', async (req, res) => {
 
 // --- API Endpoint to Display Result ---
 app.get('/result', (req, res) => {
-    /**
-     * This endpoint is meant for your front-end application to continuously poll 
-     * to display the latest scan result.
-     */
     res.json(latestBarcodeResult);
 });
 
