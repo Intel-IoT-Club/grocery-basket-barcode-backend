@@ -1,8 +1,12 @@
-// Set up modules with correct ES Module syntax
 import express from 'express';
-// --- FIX 2: Use star import for QuaggaJS to handle its ES Module structure ---
-import * as Quagga from 'quagga';
 import Jimp from 'jimp';
+
+// --- FIX: Robust Import Strategy for Quagga ---
+// We import the default package and then check if the functions 
+// are directly on it or nested inside a '.default' property.
+import QuaggaPkg from 'quagga';
+const Quagga = QuaggaPkg.default || QuaggaPkg; 
+// ----------------------------------------------
 
 const app = express();
 const PORT = process.env.PORT || 5000; 
@@ -16,7 +20,6 @@ let lastScanTime = 0;
 const COOLDOWN_SECONDS = 3;
 
 // Configure Express to accept raw binary data (JPEG image buffer)
-// ESP32-CAM will POST binary image data with Content-Type: image/jpeg
 app.use(express.raw({ 
     type: 'image/jpeg', 
     limit: '10mb' 
@@ -29,43 +32,45 @@ async function decodeBarcode(imageBuffer) {
         const image = await Jimp.read(imageBuffer);
         
         // 2. Convert to grayscale buffer required by Quagga
-        // Note: QuaggaJS primarily focuses on 1D barcodes and requires grayscale data.
         const { data, width, height } = image.grayscale().bitmap;
         
         return new Promise((resolve, reject) => {
-            // Quagga configuration
+            // Verify Quagga is loaded correctly
+            if (typeof Quagga.decodeSingle !== 'function') {
+                console.error("CRITICAL ERROR: Quagga.decodeSingle is not a function. Check imports.");
+                resolve(null);
+                return;
+            }
+
             Quagga.decodeSingle({
                 src: data,
-                numOfWorkers: 0, // Must be 0 for node-mode (server-side)
+                numOfWorkers: 0, // Must be 0 for node-mode
                 inputStream: {
                     size: width,
                     height: height
                 },
                 decoder: {
-                    readers: ["code_128_reader", "ean_reader", "upc_reader", "code_39_reader", "qr_code_reader"] 
-                    // Added qr_code_reader for completeness, but Quagga excels at 1D codes.
+                    readers: ["code_128_reader", "ean_reader", "upc_reader", "code_39_reader"]
                 }
             }, (result) => {
-                if (result && result.code) {
-                    resolve(result.code);
+                if (result && result.codeResult) {
+                    resolve(result.codeResult.code);
                 } else {
                     resolve(null);
                 }
             });
         });
     } catch (error) {
-        // Log Jimp/Quagga processing errors but don't crash the server
-        console.error("Decoding failed during image processing:", error.message);
+        console.error("Decoding failed during processing:", error.message);
         return null;
     }
 }
-
 
 // --- API Endpoint to Receive Frame from ESP32-CAM ---
 app.post('/api/upload_frame', async (req, res) => {
     const current_time = Date.now() / 1000;
     
-    // Apply Cooldown check
+    // Apply Cooldown
     if (current_time - lastScanTime < COOLDOWN_SECONDS) {
         console.log("Scan ignored (cooldown active).");
         return res.status(202).json({ success: false, message: "Scan ignored (cooldown active)." });
@@ -76,13 +81,12 @@ app.post('/api/upload_frame', async (req, res) => {
     }
 
     try {
-        // --- FIX 1: Explicitly convert raw data to a standard Buffer for Jimp ---
+        // Explicitly convert raw data to Buffer for Jimp
         const imageBuffer = Buffer.from(req.body); 
         
         const decodedData = await decodeBarcode(imageBuffer);
         
         if (decodedData) {
-            // Update global result
             latestBarcodeResult = {
                 data: decodedData,
                 timestamp: new Date().toISOString()
@@ -96,7 +100,6 @@ app.post('/api/upload_frame', async (req, res) => {
         }
 
     } catch (error) {
-        // Log the error and return a 500 status
         console.error("Error in /api/upload_frame:", error);
         return res.status(500).json({ success: false, message: error.message });
     }
